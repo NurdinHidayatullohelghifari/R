@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EL-GHIFARI Remote Control</title>
+<style>
+:root{color-scheme:dark;--bg:#08111f;--panel:#111f33;--line:#263c59;--cyan:#54d6e8;--muted:#9db0c8}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#15304c,var(--bg) 48%);color:#eef6ff;font:15px system-ui,Segoe UI,sans-serif}
+main{max-width:1100px;margin:auto;padding:28px 18px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px}.logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#1b9bb6,#635bce);display:grid;place-items:center;font-weight:900}
+h1{font-size:clamp(23px,4vw,34px);margin:0}.sub{color:var(--muted);margin-top:4px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
+.card{background:#111f33eF;border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 16px 40px #0004}.card h2{margin:0 0 12px;font-size:19px}
+button,input{font:inherit;border-radius:10px;padding:12px;border:1px solid var(--line)}input{width:100%;background:#081525;color:white;margin:8px 0 12px;text-transform:uppercase}
+button{cursor:pointer;background:#1b91aa;color:white;border:0;font-weight:700;margin:5px 4px 5px 0}button.secondary{background:#253c59}button.danger{background:#a43b4b}button:disabled{opacity:.45;cursor:not-allowed}
+.note{color:var(--muted);font-size:13px;line-height:1.5}.status{padding:10px 12px;background:#091728;border:1px solid var(--line);border-radius:10px;margin:14px 0;color:var(--cyan);min-height:42px}
+video{width:100%;max-height:65vh;background:#03070d;border-radius:12px;border:1px solid var(--line)}.hidden{display:none!important}.code{font-size:28px;letter-spacing:5px;color:var(--cyan);font-weight:800}
+#consentBox{border:1px solid #a77c36;background:#332813;padding:14px;border-radius:12px;margin:12px 0}
+footer{color:var(--muted);font-size:12px;margin:24px 0}
+</style>
+</head>
+<body><main>
+<div class="brand"><div class="logo">eL</div><div><h1>EL-GHIFARI Remote Control</h1><div class="sub">Remote screen berbasis internet • akses dengan persetujuan</div></div></div>
+<div class="grid">
+<section class="card">
+<h2>Perangkat yang membagikan layar</h2>
+<p class="note">Buka halaman ini pada perangkat target. Buat kode sesi, lalu kirim kode kepada perangkat pengendali. Berbagi layar baru dimulai setelah Anda menyetujuinya.</p>
+<button id="createBtn">Buat sesi & kode</button>
+<div id="hostCode" class="code"></div>
+<div id="consentBox" class="hidden">
+<strong>Permintaan akses masuk</strong><p class="note">Perangkat lain ingin melihat layar dan mengirim peristiwa input ke halaman web ini. Setujui hanya jika Anda mengenal pengakses.</p>
+<button id="approveBtn">Setujui & bagikan layar</button><button id="rejectBtn" class="danger">Tolak</button>
+</div>
+<button id="stopShareBtn" class="danger" disabled>Hentikan berbagi layar</button>
+</section>
+<section class="card">
+<h2>Perangkat pengendali</h2>
+<p class="note">Masukkan kode sesi dari perangkat target. Kode hanya berlaku untuk satu sesi.</p>
+<input id="joinCode" maxlength="8" placeholder="CONTOH: A1B2C3D4">
+<button id="joinBtn">Hubungkan</button>
+<div class="note">Kontrol input di versi ini hanya dikirim sebagai peristiwa ke halaman web pendamping. Tidak mengendalikan desktop/Android secara menyeluruh.</div>
+</section>
+</div>
+<section class="card" style="margin-top:16px">
+<h2>Layar jarak jauh</h2><div id="status" class="status">Belum terhubung.</div>
+<video id="remoteVideo" autoplay playsinline controls></video>
+<div style="margin-top:10px">
+<button id="sendClickBtn" class="secondary" disabled>Kirim klik tengah layar (demo web)</button>
+<button id="sendKeyBtn" class="secondary" disabled>Kirim tombol Enter (demo web)</button>
+<button id="endBtn" class="danger" disabled>Akhiri sesi</button>
+</div>
+<p class="note">Demo kontrol tidak menjalankan perintah OS dan tidak dapat menekan tombol pada aplikasi lain. Untuk kendali desktop penuh dibutuhkan agent native yang dipasang dan diizinkan secara eksplisit.</p>
+</section>
+<footer>Keamanan: gunakan HTTPS/WSS saat dipasang online. Jangan bagikan kode sesi kepada orang yang tidak dipercaya. Tutup sesi setelah selesai.</footer>
+</main>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket=io();
+let code=null, role=null, pc=null, localStream=null, consent=false;
+const $=id=>document.getElementById(id);
+const status=t=>$("status").textContent=t;
+const rtcConfig={iceServers:[{urls:"stun:stun.l.google.com:19302"}]};
+function setupPeer(){
+  pc=new RTCPeerConnection(rtcConfig);
+  pc.onicecandidate=e=>{if(e.candidate)socket.emit("ice-candidate",{code,payload:e.candidate})};
+  pc.onconnectionstatechange=()=>status("Koneksi WebRTC: "+pc.connectionState);
+  pc.ontrack=e=>$("remoteVideo").srcObject=e.streams[0];
+  pc.ondatachannel=e=>{e.channel.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch{return}
+    if(d.type==="input") status("Peristiwa input diterima (demo halaman): "+d.kind);
+  }};
+}
+$("createBtn").onclick=()=>{
+  socket.emit("create-session",{},r=>{if(!r?.ok)return status("Gagal membuat sesi.");code=r.code;role="host";$("hostCode").textContent=code;status("Kode dibuat. Menunggu perangkat pengendali.");});
+};
+socket.on("viewer-waiting",()=>{$("consentBox").classList.remove("hidden");status("Ada permintaan koneksi. Periksa sebelum menyetujui.");});
+$("rejectBtn").onclick=()=>{socket.emit("host-consent",{code,approved:false});$("consentBox").classList.add("hidden");status("Permintaan ditolak.");};
+$("approveBtn").onclick=async()=>{
+  try{
+    localStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+    setupPeer();
+    consent=true;socket.emit("host-consent",{code,approved:true});
+    $("stopShareBtn").disabled=false;$("consentBox").classList.add("hidden");
+    localStream.getTracks().forEach(t=>{pc.addTrack(t,localStream);t.onended=stopSession});
+    // Host receives offer after viewer creates it; stream tracks are attached below.
+    status("Layar sedang dibagikan. Anda dapat menghentikannya kapan saja.");
+  }catch(e){status("Berbagi layar dibatalkan atau tidak diizinkan: "+e.message);}
+};
+$("joinBtn").onclick=()=>{
+  code=$("joinCode").value.trim().toUpperCase();if(!code)return status("Masukkan kode sesi.");
+  role="viewer";
+  socket.emit("join-session",{code},async r=>{
+    if(!r?.ok){status(r?.error||"Tidak dapat bergabung.");return;}
+    setupPeer();const channel=pc.createDataChannel("remote-input");
+    window.inputChannel=channel;
+    status("Permintaan dikirim. Menunggu persetujuan pemilik layar.");
+  });
+};
+socket.on("consent-result",async({approved})=>{
+  consent=approved;if(!approved)return status("Pemilik perangkat menolak akses.");
+  status("Disetujui. Membuat koneksi...");
+  if(role==="viewer"&&pc){const offer=await pc.createOffer();await pc.setLocalDescription(offer);socket.emit("offer",{code,payload:offer});}
+});
+socket.on("offer",async({payload})=>{
+  if(role!=="host"||!consent||!pc)return;
+  await pc.setRemoteDescription(payload);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);socket.emit("answer",{code,payload:answer});
+});
+socket.on("answer",async({payload})=>{if(role==="viewer"&&pc)await pc.setRemoteDescription(payload)});
+socket.on("ice-candidate",async({payload})=>{try{await pc?.addIceCandidate(payload)}catch(e){console.warn(e)}});
+function sendInput(kind){if(!window.inputChannel||window.inputChannel.readyState!=="open")return status("Kanal input belum siap.");window.inputChannel.send(JSON.stringify({type:"input",kind}));}
+$("sendClickBtn").onclick=()=>sendInput("click-center");
+$("sendKeyBtn").onclick=()=>sendInput("Enter");
+socket.on("session-ended",({reason})=>{status(reason||"Sesi berakhir.");cleanup()});
+function cleanup(){if(pc){pc.close();pc=null}if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}$("remoteVideo").srcObject=null;$("stopShareBtn").disabled=true;$("endBtn").disabled=true;$("sendClickBtn").disabled=true;$("sendKeyBtn").disabled=true;consent=false}
+function stopSession(){if(code)socket.emit("end-session",{code});cleanup();status("Sesi dihentikan.");}
+$("stopShareBtn").onclick=stopSession;$("endBtn").onclick=stopSession;
+setInterval(()=>{const connected=pc?.connectionState==="connected";$("endBtn").disabled=!pc;$("sendClickBtn").disabled=!connected;$("sendKeyBtn").disabled=!connected},500);
+</script></body></html>
